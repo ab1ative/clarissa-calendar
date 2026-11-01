@@ -1,0 +1,997 @@
+<!doctype html>
+<!--
+  Clarissa Calendar: Richardson's Clarissa as a story calendar, with the 1748 first edition and
+  the 1751 third edition side by side and the Penguin (Ross) letter numbers.
+
+  A single static page. It loads its data from the JSON files next to it, all produced by the
+  build scripts in ../build (see the README):
+    index.json   one row per letter: numbers in each edition, heading, calendar day, place, flags
+    t1.json      1748 texts: [heading, dateline, text, notes] per letter
+    t3.json      1751 texts, same shape
+    diff.json    word-level comparison of each pair of letters
+    enc.json     paragraphs of each enclosed letter, per edition
+    places.json  where Clarissa is on each day; the days outlined on the calendar
+
+  Two views share one header:
+    Calendar  each letter as a shape on its day; clicking a day opens the letter in a pop-up
+    Letters   the list of all letters, a search box, and the open letter with both texts
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clarissa Calendar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans+Condensed:wght@400;500;600&display=swap">
+<style>
+/* ===== Base: a cream page like a book ===== */
+:root {
+  --paper: #F5EFE1; --surface: #FBF7EE; --ink: #2B2620; --muted: #6E6556; --rule: #DCD2BE;
+  --accent: #3A4C6B; --accent-soft: #E8DFCB;
+  --add: #2E6A47; --add-bg: #DCE8D2; --del: #8C2F36; --del-bg: #F0D8D1; --mark: #8A6A1F;
+  --red: #A3221E; --rev: #2F7A3E;
+  --display: "IM Fell English", "Iowan Old Style", Georgia, serif;
+  --body: "Libre Caslon Text", "Iowan Old Style", Georgia, serif;
+  --ui: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  color-scheme: light;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; }
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr; padding-inline: 16px; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.loading { font-family: var(--ui); color: var(--muted); padding: 20px 0; }
+
+/* ===== Header: title, view switch, go-to form ===== */
+header.top { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 28px; padding-block: 14px 12px; border-bottom: 1px solid var(--rule); }
+.brand h1 { font-family: var(--display); font-weight: 400; font-size: 1.9rem; line-height: 1; margin: 0; letter-spacing: .01em; }
+.brand p { margin: 4px 0 0; font-family: var(--ui); font-size: .8rem; color: var(--muted); letter-spacing: .02em; }
+.views { display: inline-flex; margin-top: 10px; }
+.goto { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: end; margin-left: auto; }
+.field { display: grid; gap: 3px; }
+.field > span { font-family: var(--ui); font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.field .row { display: flex; gap: 4px; }
+.goto input, .goto select { font-family: var(--ui); font-size: .95rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 5px 7px; font-variant-numeric: tabular-nums; }
+.goto input { width: 4.6rem; }
+.goto select { width: 4.4rem; }
+.goto button { font-family: var(--ui); background: var(--accent); color: var(--surface); border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-weight: 500; }
+.goto .msg { font-family: var(--ui); font-size: .8rem; color: var(--del); min-height: 1em; flex-basis: 100%; text-align: right; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; font-family: var(--ui); font-size: .82rem; }
+.seg button { background: transparent; border: 0; padding: 4px 10px; cursor: pointer; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+
+/* ===== Letters view: list on the left, the open letter on the right ===== */
+main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; min-height: 0; }
+aside { border-right: 1px solid var(--rule); display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 10px 0; align-items: center; }
+.filters input { flex: 1; min-width: 8rem; font-family: var(--ui); font-size: .85rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px; }
+.list { overflow-y: auto; min-height: 0; font-family: var(--ui); font-size: .85rem; padding-right: 4px; }
+.lh, .li { display: grid; grid-template-columns: 3.7rem 4.4rem 3.9rem 1fr; gap: 6px; padding: 5px 8px 5px 4px; align-items: baseline; }
+.lh { position: sticky; top: 0; background: var(--paper); color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--rule); z-index: 1; }
+.li { cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent); font-variant-numeric: tabular-nums; }
+.li:hover { background: var(--surface); }
+.li[aria-current="true"] { background: var(--accent-soft); }
+.li .L { font-weight: 600; }
+.li .w { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.list.revmode .li .w { white-space: normal; }
+.li .none { color: var(--muted); opacity: .6; }
+.li .snip { grid-column: 1 / -1; color: var(--muted); font-family: var(--body); font-size: .82rem; line-height: 1.35; padding: 0 0 2px 4px; }
+.li .snip b { font-family: var(--ui); font-weight: 600; font-size: .72rem; color: var(--ink); margin-right: 6px; }
+.li .snip mark, mark.hit { background: #f1d97a; color: inherit; border-radius: 2px; padding: 0 1px; }
+mark.hit.now { outline: 2px solid var(--ink); }
+.lcount { font-size: .75rem; color: var(--muted); padding: 4px 4px 6px; }
+.chip { display: inline-block; font-family: var(--ui); font-size: .66rem; letter-spacing: .05em; text-transform: uppercase; padding: 0 5px; border-radius: 3px; margin-right: 5px; border: 1px solid currentColor; line-height: 1.45; vertical-align: 1px; }
+.chip.new { color: var(--add); } .chip.flag { color: var(--del); } .chip.alt { color: var(--accent); } .chip.num { color: var(--mark); }
+.chip.rev { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, transparent); }
+
+section.letter { overflow-y: auto; min-height: 0; padding: 18px 0 40px 26px; }
+.status { max-width: 760px; margin: 12px 0 0; padding: 10px 14px; border-left: 3px solid var(--del); background: var(--surface); font-size: .95rem; }
+.status p { margin: 0; }
+.status a { color: var(--accent); cursor: pointer; }
+.nav { display: flex; gap: 8px; margin-top: 12px; font-family: var(--ui); font-size: .85rem; }
+.nav button { background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+.nav button:disabled { opacity: .4; cursor: default; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 22px 0 10px; font-family: var(--ui); font-size: .85rem; }
+.stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Letter heading block, shared by the Letters view and the pop-up */
+.pop-meta { padding: 10px 18px 0; }
+.lv-meta { padding: 4px 0 0; max-width: 760px; }
+.pop-who { font-family: var(--display); font-size: 1.15rem; margin: 0; }
+.lv-meta .pop-who { font-size: 1.55rem; line-height: 1.2; text-wrap: balance; }
+.pop-dt { font-style: italic; margin-left: .3em; }
+.pop-dt3 { font-family: var(--ui); font-size: .8rem; color: var(--muted); margin-left: .6em; white-space: nowrap; }
+.pop-nums { font-family: var(--ui); font-size: .8rem; color: var(--muted); margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.lv-meta .pop-nums { font-size: .85rem; margin-top: 4px; }
+.place-line { font-family: var(--ui); font-size: .8rem; color: var(--muted); margin: 3px 0 0; }
+.inf-tag { font-style: italic; border-bottom: 1px dotted var(--muted); cursor: help; margin-left: 2px; }
+.place-why { display: block; font-style: italic; }
+.dec { font-family: var(--ui); font-size: .82rem; margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--red); border-radius: 4px; background: color-mix(in srgb, var(--red) 6%, var(--surface)); max-width: 60ch; }
+.dec-k { font-weight: 600; color: var(--red); margin-right: 8px; text-transform: uppercase; letter-spacing: .06em; font-size: .72rem; }
+.revline { font-family: var(--ui); font-size: .8rem; color: var(--muted); margin: 4px 0 0; }
+.revline.g { color: var(--rev); }
+.revline a { color: inherit; text-decoration: underline; cursor: pointer; }
+.calline { font-family: var(--ui); font-size: .82rem; margin: 6px 0 0; }
+.calline button { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* ===== The texts: one column, or 1748 and 1751 in facing columns ===== */
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 22px; }
+.cols.one { grid-template-columns: minmax(0, 46rem); }
+.ch { position: sticky; top: -18px; background: var(--paper); font-family: var(--ui); font-size: .72rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); padding: 8px 0 6px; border-bottom: 1px solid var(--rule); z-index: 1; }
+.c { padding-block: .45em; min-width: 0; overflow-wrap: anywhere; position: relative; }
+.c.empty { background: repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--rule) 45%, transparent) 7px 8px); border-radius: 3px; }
+.c p { margin: 0; } .c p + p { margin-top: .7em; }
+.c p.encl { margin: 0 0 0 1.6em; padding: .35em 0 .35em .9em; border-left: 2px solid var(--rule); font-size: .96em; }   /* enclosed letter */
+.c p.encl-a { margin-top: 1em; } .c p.encl-b { margin-bottom: 1em; }
+.c p.flash { animation: flash 2.2s ease-out; }
+@keyframes flash { 0%, 30% { background: color-mix(in srgb, var(--accent) 16%, transparent); } 100% { background: transparent; } }
+ins { text-decoration: none; background: var(--add-bg); color: var(--add); border-radius: 2px; }
+del { text-decoration: line-through; text-decoration-thickness: 1px; background: var(--del-bg); color: var(--del); border-radius: 2px; }
+.fn { font-family: var(--ui); font-size: .68em; color: var(--accent); padding-left: 1px; cursor: pointer; }
+.fn:hover, .fn:focus-visible { text-decoration: underline; }
+.hand { color: var(--mark); padding: 0 2px; font-size: 1.25em; line-height: 1; font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", var(--body); }
+.fnotes { list-style: none; margin: 14px 0 0; padding: 10px 0 0; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--muted); display: grid; gap: 6px; }
+.fnotes .fnm { font-family: var(--ui); color: var(--accent); display: inline-block; min-width: 1.4em; }
+a.xref { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; cursor: pointer; }
+a.xref .xto { font-family: var(--ui); font-size: .85em; text-decoration: none; white-space: nowrap; }
+
+/* Hover cards for footnotes and for the passage a reference points to */
+.tip { position: fixed; z-index: 40; max-width: min(30rem, calc(100vw - 16px)); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 10px 30px color-mix(in srgb, var(--ink) 20%, transparent); padding: 10px 12px; font-size: .9rem; line-height: 1.5; color: var(--ink); }
+.tip-ctx { z-index: 41; max-width: min(34rem, calc(100vw - 16px)); }
+.tip p { margin: 0; }
+.tip .fnm { font-family: var(--ui); color: var(--accent); margin-right: 6px; }
+.tip-h { font-family: var(--ui); font-size: .76rem; color: var(--muted); margin-bottom: 4px !important; }
+.tip-x mark { background: color-mix(in srgb, var(--accent) 18%, transparent); color: inherit; border-radius: 2px; }
+.tip-go { font-family: var(--ui); font-size: .72rem; color: var(--muted); margin-top: 6px !important; }
+
+/* ===== Calendar view ===== */
+.calwrap { min-height: 0; padding-top: 16px; }
+.calmain { overflow-y: auto; height: 100%; padding-bottom: 40px; }
+.calintro { font-size: .95rem; line-height: 1.5; max-width: 46rem; margin: 0 0 14px; }
+.who { display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--ui); font-size: .8rem; margin-bottom: 16px; }
+.who button { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: 3px 10px 3px 8px; cursor: pointer; color: var(--ink); }
+.who button[aria-pressed="false"] { opacity: .45; }
+.who .n { color: var(--muted); }
+/* writer shapes: filled = dated, half-filled = weekday only, outline = undated */
+.sh { display: inline-block; width: 10px; height: 10px; flex: none; color: var(--ink); fill: currentColor; stroke: none; overflow: visible; }
+.sh.wk { fill-opacity: .35; stroke: currentColor; stroke-width: 1.2; }
+.sh.inf { fill: none; stroke: currentColor; stroke-width: 1.4; }
+.dag { color: var(--red); font-family: var(--body); font-weight: 700; font-size: .78em; line-height: 1; margin-left: 1px; }
+.months { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(21rem, 100%), 1fr)); gap: 26px 32px; }
+.month h3 { font-family: var(--display); font-weight: 400; font-size: 1.3rem; margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; }
+.month h3 small { font-family: var(--ui); font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wk, .days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 2px; }
+.wk span { font-family: var(--ui); font-size: .64rem; color: var(--muted); text-align: center; letter-spacing: .06em; padding-bottom: 2px; }
+/* the band above each week: names where Clarissa moves */
+.wband { grid-column: 1 / -1; padding: 7px 0 4px; }
+.wband.empty { padding: 0; height: 8px; }
+.wl { position: relative; height: 17px; }
+.wl-seg { position: absolute; bottom: 2px; height: 0; }
+.wl-t { position: absolute; left: 1px; bottom: 3px; font-family: var(--ui); font-size: .7rem; line-height: 1; color: var(--ink); white-space: nowrap; background: var(--paper); padding-right: 4px; }
+.wl-t.wl-r { left: auto; right: 0; padding: 0 0 0 4px; }
+.day { height: 4.6rem; overflow: hidden; box-sizing: border-box; border-radius: 3px; padding: 2px 3px; font-family: var(--ui); font-size: .68rem; color: var(--muted); background: transparent; border: 1px solid transparent; text-align: left; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.day.pad { visibility: hidden; }
+.day.has { background: var(--surface); border-color: var(--rule); color: var(--ink); cursor: pointer; }
+.day.has:hover { border-color: var(--accent); }
+.day[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.day .dn { line-height: 1; }
+.day .dots { display: flex; flex-wrap: wrap; gap: 3px 4px; }
+.day .dots .sh { width: 9px; height: 9px; }
+.day .dots .dag { font-size: .62rem; margin-left: -1px; }
+.day.ev { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }              /* marked event */
+.day.ev .dn { font-weight: 700; color: var(--ink); }
+.day.ev.rev { border-color: var(--rev); box-shadow: inset 0 0 0 1px var(--rev); }       /* much-revised letter */
+.day.ev.rev .dn { color: var(--rev); }
+.day.red { border-color: var(--red); box-shadow: inset 0 0 0 1px var(--red); color: var(--red); font-weight: 600; }   /* 13 June */
+.day.red .sh { color: var(--red); }
+
+/* ===== Pop-up reader on the calendar ===== */
+.pop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px)); }
+.pop-back { position: absolute; inset: 0; background: color-mix(in srgb, var(--ink) 28%, transparent); }
+.pop-card { position: relative; width: min(46rem, 100%); max-height: min(88vh, 100%); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 18px 50px color-mix(in srgb, var(--ink) 25%, transparent); overflow: hidden; }
+.pop-card.wide { width: min(76rem, 100%); }
+.pop-card.in { animation: popgrow .28s cubic-bezier(.2,.8,.2,1); }
+@keyframes popgrow { from { transform: scale(.06); opacity: 0; } to { transform: none; opacity: 1; } }
+.pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 18px 6px; border-bottom: 1px solid var(--rule); }
+.pop-head h2 { font-family: var(--display); font-weight: 400; font-size: 1.5rem; margin: 0; }
+.pop-head h2.red { color: var(--red); }
+.pop-ev { font-family: var(--display); font-size: 1.05rem; margin: 2px 0 0; }
+.pop-ev.rev { color: var(--rev); }
+.pop-x { background: none; border: 0; font-size: 1.6rem; line-height: 1; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.pop-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 18px 0; font-family: var(--ui); font-size: .8rem; }
+.pop-tabs button { display: inline-flex; align-items: center; gap: 6px; background: var(--paper); border: 1px solid var(--rule); border-radius: 999px; padding: 3px 10px 3px 8px; cursor: pointer; color: var(--ink); }
+.pop-tabs button[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.pop-tabs button.death { color: var(--red); border-color: var(--red); }                       /* L481, Clarissa's death */
+.pop-tabs button.death[aria-selected="true"] { background: color-mix(in srgb, var(--red) 10%, var(--surface)); box-shadow: inset 0 0 0 1px var(--red); }
+.pop-tabs button.death .sh { color: var(--red); }
+.pop-card .status { margin: 10px 18px 0; }
+.pop-tools { margin: 10px 18px 8px; }
+.pop-open { margin-left: auto; font-family: var(--ui); font-size: .8rem; background: none; border: 0; color: var(--accent); text-decoration: underline; cursor: pointer; padding: 0; }
+.pop-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding: 0 18px 24px; border-top: 1px solid var(--rule); }
+.pop-body .ch { top: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+  .pop-card.in { animation: none; }
+  .c p.flash { animation: none; outline: 2px solid var(--accent); }
+}
+@media (max-width: 900px) {
+  .app { height: auto; display: block; }
+  html, body { height: auto; }
+  main { display: block; }
+  aside { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .list { max-height: 38vh; }
+  section.letter { padding: 16px 0 40px; overflow: visible; }
+  .calmain { overflow: visible; }
+  .goto { margin-left: 0; }
+  .goto .msg { text-align: left; }
+  .ch { top: env(safe-area-inset-top, 0px); }
+}
+@media (max-width: 640px) {
+  .cols, .cols.one { grid-template-columns: minmax(0, 1fr); }
+  .cols:not(.one) .c::after { content: attr(data-ed); position: absolute; right: 0; top: -2px; font-family: var(--ui); font-size: .62rem; color: var(--muted); letter-spacing: .06em; }
+  .ch.hide-narrow { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Clarissa Calendar</h1>
+      <p>1748 first edition &middot; 1751 third edition &middot; Penguin (Ross) letter numbers</p>
+      <div class="seg views" role="group" aria-label="View">
+        <button type="button" id="vCal" aria-pressed="true">Calendar</button>
+        <button type="button" id="vLetters" aria-pressed="false">Letters</button>
+      </div>
+    </div>
+    <form class="goto" id="goto">
+      <label class="field" for="gL"><span>Penguin</span><div class="row"><input id="gL" inputmode="numeric" placeholder="L257" autocomplete="off"></div></label>
+      <div class="field"><span>1748 vol &middot; letter</span><div class="row">
+        <select id="g1v" aria-label="1748 volume"></select><input id="g1n" placeholder="26" aria-label="1748 letter" autocomplete="off"></div></div>
+      <div class="field"><span>1751 vol &middot; letter</span><div class="row">
+        <select id="g3v" aria-label="1751 volume"></select><input id="g3n" placeholder="24" aria-label="1751 letter" autocomplete="off"></div></div>
+      <button type="submit">Go</button>
+      <div class="msg" id="gmsg" role="status"></div>
+    </form>
+  </header>
+
+  <main hidden>
+    <aside>
+      <div class="filters">
+        <div class="seg" role="group" aria-label="Which letters">
+          <button type="button" id="fAll" aria-pressed="true">All</button>
+          <button type="button" id="fChg" aria-pressed="false">Added or split</button>
+          <button type="button" id="fRev" aria-pressed="false">Most revised</button>
+        </div>
+        <input id="fq" type="search" placeholder="Search all letters" aria-label="Search the text, notes, writers and datelines of every letter" autocomplete="off">
+      </div>
+      <div class="list" id="list" role="listbox" aria-label="Letters"></div>
+    </aside>
+    <section class="letter" id="letter" aria-live="polite"></section>
+  </main>
+
+  <div class="calwrap" id="calview">
+    <div class="calmain">
+      <p class="calintro">Samuel Richardson likely did not base the dates of his novel on any particular year, but the “common year” starting on a Sunday. 1747, the year the novel was written, was one such year.</p>
+      <div class="who" id="who" role="group" aria-label="Show letters by"></div>
+      <div class="months" id="months"></div>
+    </div>
+  </div>
+</div>
+
+<div class="pop" id="pop" hidden>
+  <div class="pop-back" data-close></div>
+  <div class="pop-card" id="popCard" role="dialog" aria-modal="true" aria-labelledby="popTitle"></div>
+</div>
+
+<script>
+/* =====================================================================================
+   State and small helpers
+   ===================================================================================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const store = {           // remembers the reader's choice of text view; storage may be unavailable
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+
+let ROWS = [];            // index.json
+let T1 = null, T3 = null, DIFF = null, ENC = null;   // texts, comparison and enclosures, loaded after the index
+let PLACES = null;        // places.json
+const EVENTS = new Map(); // month*100+day -> marked day {label, L, kind}
+let cur = 0;              // the row being shown
+let view = 'cal';         // 'cal' or 'letters'
+let filter = 'all';       // letters list: 'all', 'chg' (added or split) or 'rev' (most revised)
+let mode = ['side', 'e1', 'e3'].includes(store.get('cc-mode')) ? store.get('cc-mode') : 'side';   // Letters view
+let POP = false, popMode = 'e1', popDay = null, popReturn = null;                                     // calendar pop-up
+const REV_MIN = 300;      // "Most revised" lists letters that gained at least this many words
+const SEL_RED = 613;      // 13 June, drawn in red
+const DEATH_L = 481;      // the letter in which Clarissa dies: its tab in the pop-up is drawn in red
+
+const who = r => (r.w || '').replace(/\s+/g, ' ').replace(/\.$/, '');
+const ref1 = r => r.v1 ? (r.how.startsWith('summary') ? `(${r.v1}.${r.n1})` : `${r.v1}.${r.n1}`) : '—';
+const ref3 = r => r.v3 ? `${r.v3}.${r.n3}` : '—';
+const revisionOf = r => [...EVENTS.values()].find(e => e.kind === 'revision' && e.L === r.L);
+function romanToInt(s) {
+  s = s.trim().toUpperCase().replace(/\.$/, '');
+  if (/^\d+$/.test(s)) return +s;
+  if (!/^[IVXLC]+$/.test(s)) return NaN;
+  const v = { I: 1, V: 5, X: 10, L: 50, C: 100 }; let t = 0;
+  for (let i = 0; i < s.length; i++) { const x = v[s[i]], y = v[s[i + 1]] || 0; t += x < y ? -x : x; }
+  return t;
+}
+
+/* =====================================================================================
+   Letters list, filters and search
+   ===================================================================================== */
+function chipFor(r) {
+  const c = [], chip = (cls, t, tip) => c.push(`<span class="chip ${cls}"${tip ? ` title="${esc(tip)}"` : ''}>${t}</span>`);
+  if (r.dec) chip('flag', esc(r.dec[0]));
+  if (r.how === 'gap') chip('new', '1751 only');
+  if (['newflag', 'summary', 'summary1748', 'stub'].includes(r.how)) chip('alt', 'summary');
+  if (r.how === 'part' || (r.sib && r.sib.length)) chip('alt', 'split');
+  if (r.how === 'rewritten') chip('alt', 'rewritten');
+  if (r.enc) chip('alt', 'enclosure', `Contains ${r.enc.length > 1 ? 'enclosed letters' : 'an enclosed letter'}: Penguin ${r.enc.map(x => 'L' + x).join(', ')}`);
+  else if (r.how === 'enclosed' || r.encd) chip('alt', 'enclosure', 'This letter was sent as an enclosure in another letter');
+  if (r.note1 && r.L !== 418 && !r.how.startsWith('summary')) chip('num', 'numbering', r.note1);
+  return c.join('');
+}
+const changed = r => r.how !== 'match' || r.note1;
+
+// Search runs over plain versions of every text, built once the texts have loaded.
+let SRCH = null, QRE = null;
+const plain = t => (t || '').replace(/\d+|[^]*|[-]/g, '').replace(/^· /gm, '').replace(/←/g, '').replace(/\s+/g, ' ');
+function searchRE(q) {      // words of the query, in order, separated by anything that isn't a letter or digit
+  const words = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return words.length ? new RegExp(words.join('[^\\p{L}\\p{N}]+'), 'giu') : null;
+}
+function buildSearch() {
+  SRCH = ROWS.map(r => {
+    const b = r.b ?? (r.host ? r.host - 1 : null);
+    const t1 = T1 && r.a != null ? T1[r.a] : null, t3 = T3 && b != null ? T3[b] : null;
+    return {
+      m: [r.L ? 'L' + r.L : '', who(r), r.dt1, r.dt3, r.loc && r.loc[0], r.dec && r.dec[0], t1 && t1[0], t1 && t1[1], t3 && t3[0], t3 && t3[1]].filter(Boolean).join(' · '),
+      a: t1 ? plain(t1[2]) : '', b: t3 ? plain(t3[2]) : '',
+      n: plain([t1, t3].filter(Boolean).flatMap(t => t[3].map(n => n[2])).join(' · ')),
+    };
+  });
+}
+function hitsFor(i) {       // number of matches in a letter, and a snippet around the first
+  const S = SRCH[i]; let first = null, n = 0;
+  for (const [k, lab] of [['a', '1748'], ['b', '1751'], ['n', 'Note'], ['m', '']]) {
+    QRE.lastIndex = 0; let m;
+    while ((m = QRE.exec(S[k]))) { n++; if (!first) first = [lab, S[k], m]; if (!m[0].length) QRE.lastIndex++; }
+  }
+  if (!n) return null;
+  const [lab, text, m] = first, s = Math.max(0, m.index - 55), e = Math.min(text.length, m.index + m[0].length + 55);
+  const snip = (s ? '…' : '') + esc(text.slice(s, m.index)) + '<mark>' + esc(m[0]) + '</mark>' + esc(text.slice(m.index + m[0].length, e)) + (e < text.length ? '…' : '');
+  return { n, snip: lab ? `<b>${lab}</b>${snip}` : '' };
+}
+function renderList() {
+  const q = $('#fq').value.trim();
+  QRE = q.length >= 2 ? searchRE(q) : null;
+  if (QRE && !SRCH && T1) buildSearch();
+  let order = ROWS.map((r, i) => i);
+  if (filter === 'chg') order = order.filter(i => changed(ROWS[i]));
+  if (filter === 'rev') order = order.filter(i => (ROWS[i].ad || 0) >= REV_MIN).sort((x, y) => ROWS[y].ad - ROWS[x].ad);
+  let html = '', found = 0, total = 0;
+  for (const i of order) {
+    const r = ROWS[i];
+    let hit = null;
+    if (QRE) { if (!SRCH) continue; hit = hitsFor(i); if (!hit) continue; found++; total += hit.n; }
+    html += `<div class="li" role="option" data-i="${i}" aria-current="${i === cur}">
+      <span class="L">${r.L && r.how !== 'gap' ? r.L : r.L ? `<span class="none">${r.L}</span>` : '<span class="none">—</span>'}</span>
+      <span${r.v1 ? '' : ' class="none"'}>${ref1(r)}</span><span${r.v3 ? '' : ' class="none"'}>${ref3(r)}</span>
+      <span class="w">${filter === 'rev' ? `<span class="chip rev">+${r.ad.toLocaleString()}</span>` : chipFor(r)}${esc(who(r))}</span>${hit && hit.snip ? `<span class="snip">${hit.snip}</span>` : ''}</div>`;
+  }
+  let head = '';
+  if (QRE) head = `<div class="lcount">${!SRCH ? 'Loading the texts…' : found ? `${total.toLocaleString()} match${total > 1 ? 'es' : ''} in ${found} letter${found > 1 ? 's' : ''}` : 'No matches'}</div>`;
+  else if (filter === 'rev') head = `<div class="lcount">The ${order.length} letters Richardson expanded most for 1751, by words added</div>`;
+  $('#list').innerHTML = head + '<div class="lh"><span>Penguin</span><span>1748</span><span>1751</span><span>Writer, to</span></div>' + html;
+  $('#list').classList.toggle('revmode', filter === 'rev');
+}
+function scrollListToCurrent() {
+  const el = $(`.li[data-i="${cur}"]`); if (!el) return;
+  const box = $('#list'), top = el.offsetTop - box.offsetTop;
+  if (top < box.scrollTop + 30 || top > box.scrollTop + box.clientHeight - 30) box.scrollTop = top - box.clientHeight / 3;
+}
+function setFilter(f) {
+  filter = f;
+  for (const [id, k] of [['#fAll', 'all'], ['#fChg', 'chg'], ['#fRev', 'rev']]) $(id).setAttribute('aria-pressed', f === k);
+  renderList();
+  if (f === 'rev') $('#list').scrollTop = 0; else scrollListToCurrent();
+}
+let scrollToHit = false;   // after choosing a search result, scroll to the first match
+$('#list').addEventListener('click', e => { const li = e.target.closest('.li'); if (li) { scrollToHit = !!QRE; show(+li.dataset.i); } });
+$('#fAll').onclick = () => setFilter('all');
+$('#fChg').onclick = () => setFilter('chg');
+$('#fRev').onclick = () => setFilter('rev');
+let typing; $('#fq').addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(() => { renderList(); renderText(); }, 220); });
+
+/* =====================================================================================
+   Go to a letter by Penguin number or by volume and letter in either edition
+   ===================================================================================== */
+for (let v = 1; v <= 7; v++) $('#g1v').insertAdjacentHTML('beforeend', `<option value="${v}">${v}</option>`);
+for (let v = 1; v <= 8; v++) $('#g3v').insertAdjacentHTML('beforeend', `<option value="${v}">${v}</option>`);
+let lastEdited = 'L';
+$('#gL').addEventListener('input', () => lastEdited = 'L');
+['#g1v', '#g1n'].forEach(id => $(id).addEventListener('input', () => lastEdited = '1'));
+['#g3v', '#g3n'].forEach(id => $(id).addEventListener('input', () => lastEdited = '3'));
+$('#goto').addEventListener('submit', e => {
+  e.preventDefault(); $('#gmsg').textContent = '';
+  let i = -1, what = '';
+  if (lastEdited === 'L') {
+    const n = parseInt($('#gL').value.replace(/^\s*L/i, ''), 10); what = `Penguin L${n}`;
+    i = ROWS.findIndex(r => r.L === n);
+  } else if (lastEdited === '1') {
+    const v = +$('#g1v').value, n = romanToInt($('#g1n').value); what = `1748 Vol. ${v}, Letter ${$('#g1n').value.trim()}`;
+    i = ROWS.findIndex(r => r.v1 === v && r.n1 === n && ['match', 'rewritten', 'stub', 'enclosed'].includes(r.how));
+    if (i < 0) i = ROWS.findIndex(r => r.v1 === v && r.n1 === n);
+  } else {
+    const v = +$('#g3v').value, n = romanToInt($('#g3n').value); what = `1751 Vol. ${v}, Letter ${$('#g3n').value.trim()}`;
+    i = ROWS.findIndex(r => r.v3 === v && r.n3 === n);
+  }
+  if (i < 0) {
+    const hint = lastEdited === '1' && +$('#g1v').value === 5 && romanToInt($('#g1n').value) === 18 ? ' The 1748 printing skips from 17 to 19.' : '';
+    $('#gmsg').textContent = `No letter found for ${what}.${hint}`; return;
+  }
+  show(i);
+});
+function fillGoto(r) {
+  $('#gL').value = r.L || '';
+  if (r.v1) { $('#g1v').value = r.v1; $('#g1n').value = r.n1; } else $('#g1n').value = '';
+  if (r.v3) { $('#g3v').value = r.v3; $('#g3n').value = r.n3; } else $('#g3n').value = '';
+}
+
+/* =====================================================================================
+   The heading block of a letter (Letters view and pop-up)
+   ===================================================================================== */
+// The dateline of the edition on screen; side by side shows 1748's, and 1751's too if it differs.
+function dtSpan(r) {
+  const m = POP ? popMode : mode, d1 = r.dt1, d3 = r.dt3;
+  const one = d => d ? ` <span class="pop-dt">${esc(d)}</span>` : '';
+  if (m === 'e3' || !r.v1) return one(d3);
+  if (m === 'e1' || !d3 || d3 === d1) return one(d1);
+  return one(d1) + ` <span class="pop-dt3">1751: ${esc(d3)}</span>`;
+}
+const anyDate = r => r.dt1 || r.dt3;
+function numsLine(r) {     // "Penguin L529 · 7.105 · 8.49" (1748 vol.letter, then 1751)
+  return [r.L && !['gap', 'enclosed', 'summary1748'].includes(r.how) && !(r.how === 'summary' && r.L === 208) ? `Penguin L${r.L}` : r.L ? `L${r.L} (not in Penguin)` : null,
+          r.v1 ? `<span title="1748 edition, Volume ${r.v1}, Letter ${r.n1}">${ref1(r)}</span>` : null,
+          r.v3 ? `<span title="1751 edition, Volume ${r.v3}, Letter ${r.n3}">${ref3(r)}</span>` : null].filter(Boolean).join(' · ');
+}
+function placeLine(r) {
+  const loc = r.loc;
+  if (!loc) return '<p class="place-line">Place of writing not known</p>';
+  const inf = loc[1] === 'inferred' ? ' <span class="inf-tag" title="Not stated in the letter; worked out from where the writer is in the story">inferred</span>' : '';
+  return `<p class="place-line">Written at ${esc(loc[0])}${inf}${loc[2] ? ` <span class="place-why">${esc(loc[2])}</span>` : ''}</p>`;
+}
+const decHTML = r => r.dec ? `<p class="dec"><span class="dec-k">${esc(r.dec[0])}</span>${esc(r.dec[1])}</p>` : '';
+function revHTML(r) {
+  if ((r.ad || 0) < REV_MIN) return '';
+  return `<p class="revline${revisionOf(r) ? ' g' : ''}">Richardson added ${r.ad.toLocaleString()} words to this letter for 1751${r.dr ? ` and cut ${r.dr.toLocaleString()}` : ''}. <a data-rev>See the most revised letters</a></p>`;
+}
+function statusHTML(r) {   // only letters whose text moved between letters get a note
+  const link = L => `<a data-l="${L}">L${L}</a>`;
+  const box = t => `<div class="status"><p>${t}</p></div>`;
+  if (r.sib && r.sib.length) {
+    const all = [r.L, ...r.sib].sort((x, y) => x - y);
+    return box(`In 1748 this letter and ${r.sib.map(link).join(', ')} are printed as one letter, Vol. ${r.v1}, Letter ${r.n1}. The 1751 edition prints them as ${all.length} separate letters, L${all[0]}–${all[all.length - 1]}. In the comparison, the 1748 passages that went to the other letters appear struck through.`);
+  }
+  if (r.how === 'enclosed')
+    return box(`Morden's letter is printed separately in 1748, as Vol. ${r.v1}, Letter ${r.n1}. The 1751 edition prints it inside ${link(r.host)} as an enclosure. The 1751 column shows the whole of ${link(r.host)}; the parts that are not Morden's letter appear as added text.`);
+  if (r.L === 173)
+    return box(`The 1751 edition prints Morden's letter from Florence inside this letter as an enclosure. 1748 prints it separately, as Vol. 3, Letter 79. In the comparison, Morden's letter appears in the 1751 column as added text.`);
+  return '';
+}
+
+/* =====================================================================================
+   Letters view
+   ===================================================================================== */
+function show(i) {
+  cur = Math.max(0, Math.min(ROWS.length - 1, i));
+  const r = ROWS[cur];
+  document.querySelectorAll('.li[aria-current="true"]').forEach(e => e.setAttribute('aria-current', 'false'));
+  const li = $(`.li[data-i="${cur}"]`); if (li) li.setAttribute('aria-current', 'true');
+  scrollListToCurrent(); fillGoto(r);
+  try { history.replaceState(null, '', r.L ? '#L' + r.L : '#letters'); } catch (e) {}
+  const sec = $('#letter');
+  sec.innerHTML = `
+    <div class="pop-meta lv-meta">
+      <p class="pop-who">${esc(who(r)) || 'Untitled letter'}${dtSpan(r)}</p>
+      <p class="pop-nums">${numsLine(r)}</p>
+      ${placeLine(r)}${decHTML(r)}${revHTML(r)}
+      ${r.cal ? '<p class="calline"><button type="button" id="toCal">See this day on the calendar</button></p>' : ''}
+    </div>
+    ${statusHTML(r)}
+    <div class="nav"><button type="button" id="prev" ${cur ? '' : 'disabled'}>← Previous</button><button type="button" id="next" ${cur < ROWS.length - 1 ? '' : 'disabled'}>Next →</button></div>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Text view">
+        <button type="button" data-m="side" aria-pressed="${mode === 'side'}">Side by side</button>
+        <button type="button" data-m="e1" aria-pressed="${mode === 'e1'}">1748 only</button>
+        <button type="button" data-m="e3" aria-pressed="${mode === 'e3'}">1751 only</button>
+      </div>
+      <span class="stats" id="stats"></span>
+    </div>
+    <div id="text"><div class="loading">Loading the texts…</div></div>`;
+  const tc = $('#toCal'); if (tc) tc.onclick = () => { selDay = r.cal[0] * 100 + r.cal[1]; calScrollTo = true; setView('cal'); };
+  $('#prev').onclick = () => show(cur - 1);
+  $('#next').onclick = () => show(cur + 1);
+  sec.querySelectorAll('.status a[data-l]').forEach(a => a.onclick = () => show(ROWS.findIndex(x => x.L === +a.dataset.l)));
+  sec.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m; store.set('cc-mode', mode); show(cur); });
+  sec.scrollTop = 0;
+  renderText();
+}
+
+/* =====================================================================================
+   Rendering the texts
+   ===================================================================================== */
+// Words of a text, with their paragraph number. Must match tokens() in build/common.py: the
+// word positions in diff.json and in the cross-references index into this list.
+function tokens(txt) {
+  const T = [];
+  (txt || '').split('\n').forEach((p, pi) => {
+    if (p.startsWith('· ')) p = p.slice(2);
+    for (const w of p.split(/\s+/)) if (w) T.push({ w, p: pi });
+  });
+  return T;
+}
+const isWord = w => /[\p{L}\p{N}]/u.test(w);
+
+// Enclosed letters inside the letter being shown: {1: [[firstPara, lastPara], ...], 3: [...]}
+let ENCNOW = { 1: [], 3: [] };
+function encClass(ed, p) {
+  for (const [a, b] of ENCNOW[ed]) if (p >= a && p <= b) return ` class="encl${p === a ? ' encl-a' : ''}${p === b ? ' encl-b' : ''}"`;
+  return '';
+}
+
+// Footnotes of the letter being shown, per edition: serial -> [mark, text, refs]
+let NOTES = { 1: {}, 3: {} };
+// A word's hidden markers become footnote marks, pointing hands and links to letters.
+function wordHTML(w, ed) {
+  w = esc(w.replace(/[-]/g, ''));
+  w = w.replace(/(\d):(\d+):(\d+)/g, (m, e, li, wd) => {
+    const k = rowOf(e, +li), L = k >= 0 ? ROWS[k].L : null;
+    return L ? `<a class="xref" tabindex="0" data-ed="${e}" data-li="${li}" data-w="${wd}">L${L}</a>` : '';
+  });
+  return w.replace(/←/g, '<span class="hand" title="Pointing hand">☞</span>').replace(/(\d+)/g, (m, n) => {
+    const note = NOTES[ed][n];
+    if (!note) return '';
+    if (note[0] === '☞') return '<span class="hand" title="Pointing hand in the margin">☞</span>';
+    return `<sup class="fn" tabindex="0" data-ed="${ed}" data-n="${n}" aria-label="Note ${esc(note[0])}">${esc(note[0] || '*')}</sup>`;
+  });
+}
+// Paragraphs for a run of words; cls[i] marks words as d (cut in 1751) or i (added in 1751).
+function cellHTML(T, idx, cls, ed) {
+  let html = '', para = -1, run = null, runTag = '';
+  const close = () => { if (run) { html += `<${runTag}>${run.join(' ')}</${runTag}>`; run = null; } };
+  for (const i of idx) {
+    const t = T[i], c = cls ? cls[i] : 'e', tag = c === 'd' ? 'del' : c === 'i' ? 'ins' : null;
+    if (t.p !== para) { close(); if (para >= 0) html += '</p>'; html += `<p data-p="${t.p}"${encClass(ed, t.p)}>`; para = t.p; }
+    else if (!(run && tag === runTag)) { close(); html += ' '; }
+    const w = wordHTML(t.w, ed);
+    if (!tag) html += w; else if (run && runTag === tag) run.push(w); else { run = [w]; runTag = tag; }
+  }
+  close(); if (para >= 0) html += '</p>';
+  return html.replace(/ <\/p>/g, '</p>');
+}
+// Row of the letter that is entry `li` of edition `ed`'s texts.
+function rowOf(ed, li) {
+  let k = ROWS.findIndex(r => (ed == 1 ? r.a : (r.b ?? (r.host ? r.host - 1 : null))) === li && r.how !== 'part');
+  if (k < 0) k = ROWS.findIndex(r => (ed == 1 ? r.a : r.b) === li);
+  return k;
+}
+// A note's text with its cross-references ("Vol. iii. p. 130") as links to the letter.
+function noteText(note, ed) {
+  const [, text, refs] = note; let out = '', at = 0;
+  for (const [s, e, li, w] of refs) {
+    if (s < at) continue;
+    const k = rowOf(ed, li), L = k >= 0 ? ROWS[k].L : null;
+    out += esc(text.slice(at, s)) + `<a class="xref" tabindex="0" data-ed="${ed}" data-li="${li}" data-w="${w}">${esc(text.slice(s, e))}<span class="xto">${L ? ' → L' + L : ''}</span></a>`;
+    at = e;
+  }
+  return out + esc(text.slice(at));
+}
+function notesHTML(T, idx, ed) {   // the notes referred to in these words, listed under the text
+  const seen = new Set(), items = [];
+  for (const i of idx) for (const m of T[i].w.matchAll(/(\d+)/g)) {
+    const n = m[1], note = NOTES[ed][n];
+    if (!note || note[0] === '☞' || seen.has(n)) continue;
+    seen.add(n); items.push(`<li><span class="fnm">${esc(note[0] || '*')}</span>${noteText(note, ed)}</li>`);
+  }
+  return items.length ? `<ol class="fnotes" aria-label="Richardson's notes">${items.join('')}</ol>` : '';
+}
+
+// Draw the current letter into #text: one edition, or both with the changes marked.
+function renderText() {
+  const box = $('#text'); if (!box) return;
+  if (!T1) { box.innerHTML = '<div class="loading">Loading the texts…</div>'; return; }
+  const M = POP ? popMode : mode, r = ROWS[cur];
+  const bIdx = r.b ?? (r.host ? r.host - 1 : null);
+  const t1 = r.a != null ? T1[r.a] : null, t3 = bIdx != null ? T3[bIdx] : null;
+  const TA = t1 ? tokens(t1[2]) : [], TB = t3 ? tokens(t3[2]) : [];
+  ENCNOW = { 1: (r.a != null && ENC['1'][r.a]) || [], 3: (bIdx != null && ENC['3'][bIdx]) || [] };
+  NOTES = { 1: Object.fromEntries((t1 ? t1[3] : []).map(n => [n[0], n.slice(1)])), 3: Object.fromEntries((t3 ? t3[3] : []).map(n => [n[0], n.slice(1)])) };
+  const isSummary = r.how === 'summary';
+  const label1 = isSummary || r.how === 'summary1748' ? '1748 · editor’s summary' : '1748 · first edition';
+  const words = T => T.filter(t => isWord(t.w)).length.toLocaleString();
+
+  if (M !== 'side' || !TA.length || !TB.length) {            // one edition
+    const useA = M === 'e1' || (M === 'side' && TA.length && !TB.length);
+    const T = useA ? TA : TB, ed = useA ? 1 : 3, hdr = useA ? t1 : t3;
+    if (!T.length) {
+      $('#stats').textContent = '';
+      box.innerHTML = `<p class="loading">${['newflag', 'stub'].includes(r.how) && M === 'e1' ? 'The 1748 edition prints an editor’s summary here, but it is missing from the transcription used.' : `This letter has no text in the ${M === 'e1' ? '1748' : '1751'} edition.`}</p>`;
+    } else {
+      const idx = T.map((_, i) => i);
+      $('#stats').textContent = `${words(T)} words`;
+      box.innerHTML = `<div class="cols one"><div class="ch">${useA ? label1 : '1751 · third edition'}${hdr && hdr[0] ? ' — ' + esc(hdr[0]) : ''}</div>
+        <div class="c">${cellHTML(T, idx, null, ed)}${notesHTML(T, idx, ed)}</div></div>` + (M === 'side' ? '<p class="loading">Only one edition has text for this letter.</p>' : '');
+    }
+    return markHits();
+  }
+
+  const head = `<div class="cols"><div class="ch">${label1}</div><div class="ch hide-narrow">1751 · third edition</div>`;
+  if (isSummary) {            // a summary and a letter aren't versions of one text: side by side, unmarked
+    const ia = TA.map((_, i) => i), ib = TB.map((_, i) => i);
+    $('#stats').textContent = `Summary ${words(TA)} words · letter ${words(TB)} words`;
+    box.innerHTML = head + `<div class="c" data-ed="1748">${cellHTML(TA, ia, null, 1)}${notesHTML(TA, ia, 1)}</div><div class="c" data-ed="1751">${cellHTML(TB, ib, null, 3)}${notesHTML(TB, ib, 3)}</div></div>`;
+    return markHits();
+  }
+
+  // Walk the comparison: each step is a 1748 word, a 1751 word, or one of each.
+  const ops = DIFF[`${r.a}:${bIdx}`] || [['r', 0, TA.length, 0, TB.length]];
+  const ca = new Array(TA.length).fill('e'), cb = new Array(TB.length).fill('e'), steps = [];
+  for (const [tag, i1, i2, j1, j2] of ops) {
+    if (tag === 'e') for (let k = 0; k < i2 - i1; k++) steps.push([i1 + k, j1 + k]);
+    else if (tag === 's') for (let k = 0; k < Math.max(i2 - i1, j2 - j1); k++) steps.push([i1 + k < i2 ? i1 + k : null, j1 + k < j2 ? j1 + k : null]);
+    else { for (let i = i1; i < i2; i++) { ca[i] = 'd'; steps.push([i, null]); } for (let j = j1; j < j2; j++) { cb[j] = 'i'; steps.push([null, j]); } }
+  }
+  // Facing rows break only where both editions start a new paragraph at the same point.
+  const startA = i => i >= TA.length || i === 0 || TA[i].p !== TA[i - 1].p;
+  const startB = j => j >= TB.length || j === 0 || TB[j].p !== TB[j - 1].p;
+  if (NARROW.matches) return mergedText(box, steps, TA, TB, ca, cb, startA, startB);
+  const rows = []; let row = { a: [], b: [] }, posA = 0, posB = 0;
+  for (const [i, j] of steps) {
+    if ((row.a.length || row.b.length) && startA(i ?? posA) && startB(j ?? posB)) { rows.push(row); row = { a: [], b: [] }; }
+    if (i != null) { row.a.push(i); posA = i + 1; }
+    if (j != null) { row.b.push(j); posB = j + 1; }
+  }
+  if (row.a.length || row.b.length) rows.push(row);
+  let html = head, add = 0, cut = 0;
+  for (const { a, b } of rows) {
+    for (const i of a) if (ca[i] === 'd' && isWord(TA[i].w)) cut++;
+    for (const j of b) if (cb[j] === 'i' && isWord(TB[j].w)) add++;
+    html += a.length ? `<div class="c" data-ed="1748">${cellHTML(TA, a, ca, 1)}</div>` : '<div class="c empty" aria-hidden="true"></div>';
+    html += b.length ? `<div class="c" data-ed="1751">${cellHTML(TB, b, cb, 3)}</div>` : '<div class="c empty" aria-hidden="true"></div>';
+  }
+  const nA = notesHTML(TA, TA.map((_, i) => i), 1), nB = notesHTML(TB, TB.map((_, i) => i), 3);
+  if (nA || nB) html += `<div class="c" data-ed="1748">${nA}</div><div class="c" data-ed="1751">${nB}</div>`;
+  box.innerHTML = html + '</div>';
+  $('#stats').textContent = add || cut ? `1751 adds ${add.toLocaleString()} words, drops ${cut.toLocaleString()}` : 'No changes in wording';
+  markHits();
+}
+
+// On a phone there is no room for facing columns: show one text, the 1751 wording with the 1748
+// words it drops struck through in place, paragraphed as in 1751.
+const NARROW = matchMedia('(max-width: 640px)');
+NARROW.addEventListener('change', () => renderText());
+function mergedText(box, steps, TA, TB, ca, cb, startA, startB) {
+  const M = [], cls = [];                      // merged words: {w, p, ed, para}
+  let para = -1, add = 0, cut = 0;
+  for (const [i, j] of steps) {
+    if (j == null && ca[i] !== 'd') continue;   // 1748 spelling of a word 1751 also has
+    const t = j != null ? TB[j] : TA[i], ed = j != null ? 3 : 1;
+    if (j != null ? startB(j) : startA(i)) para++;
+    M.push({ w: t.w, p: Math.max(para, 0), ed, src: t.p });
+    cls.push(j == null ? 'd' : cb[j] === 'i' ? 'i' : 'e');
+    if (j == null && isWord(t.w)) cut++;
+    if (j != null && cb[j] === 'i' && isWord(t.w)) add++;
+  }
+  let html = '', p = -1, run = null, runTag = '';
+  const close = () => { if (run) { html += `<${runTag}>${run.join(' ')}</${runTag}>`; run = null; } };
+  M.forEach((t, k) => {
+    const tag = cls[k] === 'd' ? 'del' : cls[k] === 'i' ? 'ins' : null;
+    if (t.p !== p) { close(); if (p >= 0) html += '</p>'; html += `<p data-p="${t.ed === 3 ? t.src : ''}"${t.ed === 3 ? encClass(3, t.src) : ''}>`; p = t.p; }
+    else if (!(run && tag === runTag)) { close(); html += ' '; }
+    const w = wordHTML(t.w, t.ed);
+    if (!tag) html += w; else if (run && runTag === tag) run.push(w); else { run = [w]; runTag = tag; }
+  });
+  close(); if (p >= 0) html += '</p>';
+  const dropped = TA.map((_, i) => i).filter(i => ca[i] === 'd');
+  box.innerHTML = `<div class="cols one"><div class="ch">1748 → 1751</div><div class="c">${html.replace(/ <\/p>/g, '</p>')}${notesHTML(TB, TB.map((_, j) => j), 3)}${notesHTML(TA, dropped, 1)}</div></div>`;
+  $('#stats').textContent = add || cut ? `1751 adds ${add.toLocaleString()} words, drops ${cut.toLocaleString()}` : 'No changes in wording';
+  markHits();
+}
+
+// Highlight the search in the letter shown; bring the first match into view after a search click.
+function markHits() {
+  const box = $('#text'); if (!box || !QRE) { scrollToHit = false; return; }
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: n => n.parentElement.closest('button, .xto') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  const nodes = []; while (walk.nextNode()) nodes.push(walk.currentNode);
+  for (const node of nodes) {
+    const t = node.nodeValue; QRE.lastIndex = 0;
+    if (!QRE.test(t)) continue;
+    QRE.lastIndex = 0; const frag = document.createDocumentFragment(); let at = 0, m;
+    while ((m = QRE.exec(t))) {
+      if (!m[0].length) { QRE.lastIndex++; continue; }
+      frag.append(t.slice(at, m.index));
+      const mk = document.createElement('mark'); mk.className = 'hit'; mk.textContent = m[0]; frag.append(mk);
+      at = m.index + m[0].length;
+    }
+    frag.append(t.slice(at)); node.replaceWith(frag);
+  }
+  const marks = box.querySelectorAll('mark.hit');
+  if (marks.length) $('#stats').textContent += ` · ${marks.length} match${marks.length > 1 ? 'es' : ''} highlighted`;
+  if (scrollToHit && marks.length) { marks[0].classList.add('now'); marks[0].scrollIntoView({ block: 'center' }); }
+  scrollToHit = false;
+}
+
+/* =====================================================================================
+   Hover cards: a footnote's text, and the passage a cross-reference points to
+   ===================================================================================== */
+const tips = { note: null, ctx: null };
+function tipEl(kind) {
+  if (!tips[kind]) {
+    const d = document.createElement('div'); d.className = 'tip tip-' + kind; d.hidden = true; d.setAttribute('role', 'tooltip');
+    d.addEventListener('mouseenter', () => clearTimeout(d._t));
+    d.addEventListener('mouseleave', () => hideTip(kind, 250));
+    document.body.appendChild(d); tips[kind] = d;
+  }
+  return tips[kind];
+}
+function placeTip(d, anchor) {
+  const r = anchor.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  d.hidden = false; d.style.left = '0px'; d.style.top = '0px';
+  const w = d.offsetWidth, h = d.offsetHeight;
+  const x = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), vw - w - 8);
+  let y = r.bottom + 8; if (y + h > vh - 8) y = Math.max(8, r.top - h - 8);
+  d.style.left = x + 'px'; d.style.top = y + 'px';
+}
+function hideTip(kind, delay) {
+  const d = tips[kind]; if (!d) return;
+  clearTimeout(d._t); d._t = setTimeout(() => { d.hidden = true; if (kind === 'note') hideTip('ctx', 0); }, delay || 0);
+}
+function contextHTML(ed, li, w) {
+  const T = ed == 1 ? T1 : T3; if (!T || !T[li]) return '';
+  const toks = tokens(T[li][2]), k = rowOf(ed, li), r = k >= 0 ? ROWS[k] : null;
+  const from = Math.max(0, w - 12), to = Math.min(toks.length, w + 55);
+  const words = (a, b) => toks.slice(a, b).map(t => esc(plain(t.w))).join(' ');
+  const head = r ? `<p class="tip-h">${r.L ? 'L' + r.L + ' · ' : ''}${esc(who(r))}${anyDate(r) ? ' · ' + esc(ed == 1 ? r.dt1 || r.dt3 : r.dt3 || r.dt1) : ''}</p>` : '';
+  return `${head}<p class="tip-x">${from > 0 ? '… ' : ''}${words(from, w)} <mark>${words(w, Math.min(to, w + 10))}</mark> ${words(Math.min(to, w + 10), to)}${to < toks.length ? ' …' : ''}</p>
+    <p class="tip-go">${ed == 1 ? '1748' : '1751'} text · click to open the letter here</p>`;
+}
+function goToRef(ed, li, w) {   // open the referenced letter in that edition and flash the paragraph
+  const k = rowOf(ed, li); if (k < 0) return;
+  hideTip('note', 0); hideTip('ctx', 0);
+  const pi = tokens((ed == 1 ? T1 : T3)[li][2])[w]?.p ?? 0;
+  if (POP) { popMode = ed == 1 ? 'e1' : 'e3'; cur = k; popDay = null; renderPop(); }
+  else { mode = ed == 1 ? 'e1' : 'e3'; show(k); }
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`#text .c p[data-p="${pi}"]`);
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2200); }
+  });
+}
+document.addEventListener('mouseover', e => {
+  const fn = e.target.closest('sup.fn'), xr = e.target.closest('a.xref');
+  if (fn) {
+    const note = NOTES[fn.dataset.ed][fn.dataset.n]; if (!note) return;
+    const d = tipEl('note'); clearTimeout(d._t);
+    d.innerHTML = `<p><span class="fnm">${esc(note[0] || '*')}</span>${noteText(note, fn.dataset.ed)}</p>`;
+    placeTip(d, fn);
+  } else if (xr) {
+    const d = tipEl('ctx'); clearTimeout(d._t);
+    if (xr.closest('.tip-note')) clearTimeout(tipEl('note')._t);
+    d.innerHTML = contextHTML(xr.dataset.ed, +xr.dataset.li, +xr.dataset.w);
+    placeTip(d, xr);
+  }
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.closest('sup.fn')) hideTip('note', 300);
+  if (e.target.closest('a.xref')) hideTip('ctx', 250);
+});
+document.addEventListener('click', e => {
+  const xr = e.target.closest('a.xref');
+  if (xr) { e.preventDefault(); goToRef(xr.dataset.ed, +xr.dataset.li, +xr.dataset.w); return; }
+  const fn = e.target.closest('sup.fn');
+  if (fn) {                                     // touch screens: a tap opens and closes the note
+    const d = tipEl('note');
+    if (!d.hidden && d._for === fn) { hideTip('note', 0); return; }
+    fn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); d._for = fn; return;
+  }
+  if (e.target.closest('a[data-rev]')) { if (POP) closePop(); setView('letters'); setFilter('rev'); return; }
+  if (!e.target.closest('.tip')) { hideTip('note', 0); hideTip('ctx', 0); }
+});
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('a.xref')) { e.preventDefault(); t.click(); }
+  if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('sup.fn')) { e.preventDefault(); t.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); }
+  if (e.key === 'Escape') { hideTip('note', 0); hideTip('ctx', 0); if (POP) closePop(); }
+});
+
+/* =====================================================================================
+   Calendar view
+   ===================================================================================== */
+// One shape per writer group, all in ink: filled = dated, half-filled = weekday only, outline = undated
+const SHAPES = {
+  clarissa: '<circle cx="5" cy="5" r="4.2"/>',
+  lovelace: '<rect x="1" y="1" width="8" height="8"/>',
+  howe: '<polygon points="5,0.6 9.6,9 0.4,9"/>',
+  belford: '<polygon points="5,0.3 9.7,5 5,9.7 0.3,5"/>',
+  family: '<polygon points="3.4,0.5 6.6,0.5 6.6,3.4 9.5,3.4 9.5,6.6 6.6,6.6 6.6,9.5 3.4,9.5 3.4,6.6 0.5,6.6 0.5,3.4 3.4,3.4"/>',
+  other: '<polygon points="5,0.3 6.3,3.6 9.8,3.7 7,5.9 8,9.6 5,7.5 2,9.6 3,5.9 0.2,3.7 3.7,3.6"/>',
+};
+const shape = (g, kind) => `<svg class="sh${kind === 'w' ? ' wk' : kind === 'i' ? ' inf' : ''}" viewBox="0 0 10 10" aria-hidden="true">${SHAPES[g] || SHAPES.other}</svg>`;
+const DAG = '<span class="dag" title="Forged, sent under a false name, or otherwise deceptive">†</span>';
+const GROUPS = [['clarissa', 'Clarissa'], ['lovelace', 'Lovelace'], ['howe', 'Anna Howe'], ['belford', 'Belford'], ['family', 'Families and connections'], ['other', 'Others']];
+const shown = new Set(GROUPS.map(g => g[0]));
+
+// The story's year: a common year beginning on a Sunday (see build/common.py)
+const MD = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const doy = (m, d) => MD.slice(0, m - 1).reduce((a, b) => a + b, 0) + d - 1;
+const wdOf = (m, d) => (6 + doy(m, d)) % 7;
+const dayName = (m, d) => `${WEEKDAYS[wdOf(m, d)]} ${d} ${MONTHS[m - 1]}`;
+
+let selDay = null, calScrollTo = false;
+function setView(v) {
+  view = v;
+  $('#vLetters').setAttribute('aria-pressed', v === 'letters'); $('#vCal').setAttribute('aria-pressed', v === 'cal');
+  $('main').hidden = v !== 'letters'; $('#goto').hidden = v !== 'letters'; $('#calview').hidden = v !== 'cal';
+  if (v === 'cal') { try { history.replaceState(null, '', '#cal'); } catch (e) {} renderCal(); }
+  else show(cur);
+}
+$('#vLetters').onclick = () => setView('letters');
+$('#vCal').onclick = () => setView('cal');
+
+function dayMap() {       // month*100+day -> rows on that day, for the writers shown
+  const map = new Map();
+  ROWS.forEach((r, i) => { if (!r.cal || !shown.has(r.g)) return; const k = r.cal[0] * 100 + r.cal[1]; if (!map.has(k)) map.set(k, []); map.get(k).push(i); });
+  return map;
+}
+// The band over a week: Clarissa's whereabouts, named where she moves and at each month's start.
+function weekBand(m, week) {
+  const placeOn = x => PLACES && PLACES.clarissa.find(s => x >= s[0] && x < s[1]);
+  const runs = []; let run = null;
+  week.forEach((d, i) => {
+    const s = d == null ? null : placeOn(doy(m, d));
+    if (run && s && run.name === s[2]) { run.n++; return; }
+    run = s ? { name: s[2], full: s[3], start: i, n: 1, d } : null;
+    if (run) runs.push(run);
+  });
+  const labels = runs.filter(r => { const prev = placeOn(doy(m, r.d) - 1); return r.d === 1 || !prev || prev[2] !== r.name; });
+  if (!labels.length) return '<div class="wband empty" aria-hidden="true"></div>';
+  return `<div class="wband" aria-hidden="true"><div class="wl">${labels.map(r => {
+    const right = r.start >= 4 && r.start + r.n === 7 && r.n <= 3;     // late-week names hug the right edge
+    return `<span class="wl-seg" style="left:${(r.start / 7 * 100).toFixed(3)}%;width:${(r.n / 7 * 100).toFixed(3)}%" title="${esc('Clarissa: ' + r.full)}"><span class="wl-t${right ? ' wl-r' : ''}">${esc(r.name)}</span></span>`;
+  }).join('')}</div></div>`;
+}
+function renderCal() {
+  const map = dayMap();
+  $('#who').innerHTML = GROUPS.map(([k, lab]) =>
+    `<button type="button" data-g="${k}" aria-pressed="${shown.has(k)}">${shape(k)}${lab} <span class="n">${ROWS.filter(r => r.g === k && r.cal).length}</span></button>`).join('');
+  $('#who').querySelectorAll('button').forEach(b => b.onclick = () => { const g = b.dataset.g; shown.has(g) ? shown.delete(g) : shown.add(g); renderCal(); });
+  if (selDay == null) selDay = ROWS[cur].cal ? ROWS[cur].cal[0] * 100 + ROWS[cur].cal[1] : 110;
+  let html = '';
+  for (let m = 1; m <= 12; m++) {
+    let count = 0; for (let d = 1; d <= MD[m - 1]; d++) count += (map.get(m * 100 + d) || []).length;
+    html += `<div class="month"><h3>${MONTHS[m - 1]}<small>${count} letter${count === 1 ? '' : 's'}</small></h3>
+      <div class="wk">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<span>${x}</span>`).join('')}</div><div class="days">`;
+    const slots = Array((wdOf(m, 1) + 1) % 7).fill(null);     // weeks start on Sunday
+    for (let d = 1; d <= MD[m - 1]; d++) slots.push(d);
+    while (slots.length % 7) slots.push(null);
+    for (let w = 0; w < slots.length; w += 7) {
+      const week = slots.slice(w, w + 7);
+      html += weekBand(m, week);
+      for (const d of week) {
+        if (d == null) { html += '<span class="day pad"></span>'; continue; }
+        const key = m * 100 + d, list = map.get(key) || [], ev = EVENTS.get(key);
+        if (!list.length && !ev) { html += `<span class="day"><span class="dn">${d}</span></span>`; continue; }
+        const cls = (key === SEL_RED ? ' red' : '') + (ev ? ' ev' + (ev.kind === 'revision' ? ' rev' : '') : '');
+        const dots = list.map(i => shape(ROWS[i].g, ROWS[i].cal[2]) + (ROWS[i].dec ? DAG : '')).join('');
+        const label = `${dayName(m, d)}${ev ? ': ' + esc(ev.label) : ''}${list.length ? `, ${list.length} letter${list.length > 1 ? 's' : ''}` : ''}`;
+        html += `<button type="button" class="day has${cls}" data-k="${key}" aria-pressed="${key === selDay}"${ev ? ` title="${esc(ev.label)}"` : ''} aria-label="${label}"><span class="dn">${d}</span>${dots ? `<span class="dots">${dots}</span>` : ''}</button>`;
+      }
+    }
+    html += '</div></div>';
+  }
+  $('#months').innerHTML = html;
+  $('#months').querySelectorAll('.day.has').forEach(b => b.onclick = () => {
+    selDay = +b.dataset.k; renderCal();
+    const list = dayMap().get(selDay) || [], ev = EVENTS.get(selDay);
+    const evi = ev ? ROWS.findIndex(r => r.L === ev.L) : -1;      // a marked day opens its event's letter
+    const first = evi >= 0 && (list.includes(evi) || !list.length) ? evi : list[0];
+    if (first != null && first >= 0) { popDay = selDay; openPop(first, $(`.day[data-k="${selDay}"]`)); }
+  });
+  if (calScrollTo) { calScrollTo = false; const sel = $(`.day[data-k="${selDay}"]`); if (sel) sel.scrollIntoView({ block: 'center' }); }
+}
+
+/* =====================================================================================
+   Pop-up reader on the calendar (it borrows the #text and #stats ids of the Letters view)
+   ===================================================================================== */
+function openPop(i, originEl) {
+  cur = i; POP = true; popReturn = originEl || null;
+  $('#letter').innerHTML = '';
+  const card = $('#popCard'), pop = $('#pop');
+  pop.hidden = false;
+  if (originEl) {                               // grow out of the day that was clicked
+    const o = originEl.getBoundingClientRect(), c = card.getBoundingClientRect();
+    card.style.transformOrigin = `${o.left + o.width / 2 - c.left}px ${o.top + o.height / 2 - c.top}px`;
+  }
+  renderPop();
+  card.classList.remove('in'); void card.offsetWidth; card.classList.add('in');
+  $('#popClose').focus();
+}
+function renderPop() {
+  const r = ROWS[cur], key = popDay ?? (r.cal ? r.cal[0] * 100 + r.cal[1] : selDay);
+  const m = Math.floor(key / 100), d = key % 100, ev = EVENTS.get(key), rev = revisionOf(r);
+  const list = dayMap().get(key) || [cur];
+  $('#popCard').innerHTML = `
+    <header class="pop-head">
+      <div><h2 id="popTitle"${key === SEL_RED ? ' class="red"' : ''}>${dayName(m, d)}</h2>${ev && ev.kind === 'event' ? `<p class="pop-ev">${esc(ev.label)}</p>` : ''}${rev ? `<p class="pop-ev rev">${esc(rev.label)}</p>` : ''}</div>
+      <button type="button" class="pop-x" id="popClose" data-close aria-label="Close">×</button>
+    </header>
+    ${list.length > 1 ? `<div class="pop-tabs" role="tablist">${list.map(i => `<button type="button" role="tab" data-pi="${i}" aria-selected="${i === cur}"${ROWS[i].L === DEATH_L ? ' class="death"' : ''}>${shape(ROWS[i].g, ROWS[i].cal && ROWS[i].cal[2])}${ROWS[i].dec ? DAG : ''}<span>${esc(who(ROWS[i]).replace(/,? To .*/i, ''))}</span></button>`).join('')}</div>` : ''}
+    <div class="pop-meta">
+      <p class="pop-who">${esc(who(r))}${dtSpan(r)}</p>
+      <p class="pop-nums">${numsLine(r)}</p>
+      ${placeLine(r)}${decHTML(r)}${revHTML(r)}
+    </div>
+    ${statusHTML(r)}
+    <div class="toolbar pop-tools">
+      <div class="seg" role="group" aria-label="Text">
+        <button type="button" data-pm="e1" aria-pressed="${popMode === 'e1'}">1748</button>
+        <button type="button" data-pm="e3" aria-pressed="${popMode === 'e3'}">1751</button>
+        <button type="button" data-pm="side" aria-pressed="${popMode === 'side'}">Compare</button>
+      </div>
+      <span class="stats" id="stats"></span>
+      <button type="button" class="pop-open" id="popOpen">Open in Letters view</button>
+    </div>
+    <div class="pop-body"><div id="text"><div class="loading">Loading the texts…</div></div></div>`;
+  const card = $('#popCard');
+  card.classList.toggle('wide', popMode === 'side');
+  card.querySelectorAll('[data-pi]').forEach(b => b.onclick = () => { cur = +b.dataset.pi; renderPop(); });
+  card.querySelectorAll('[data-pm]').forEach(b => b.onclick = () => { popMode = b.dataset.pm; renderPop(); });
+  card.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closePop());
+  card.querySelectorAll('.status a[data-l]').forEach(a => a.onclick = () => { const k = ROWS.findIndex(x => x.L === +a.dataset.l); if (k >= 0) { popDay = null; cur = k; renderPop(); } });
+  $('#popOpen').onclick = () => { closePop(true); setView('letters'); };
+  renderText();
+}
+function closePop(silent) {
+  POP = false; popDay = null; $('#pop').hidden = true; $('#popCard').innerHTML = '';
+  if (!silent && popReturn && document.contains(popReturn)) popReturn.focus();
+}
+$('#pop').addEventListener('click', e => { if (e.target.matches('[data-close]')) closePop(); });
+
+/* =====================================================================================
+   Start: index and places first (the calendar needs nothing else), then the texts
+   ===================================================================================== */
+async function boot() {
+  try {
+    ROWS = await (await fetch('index.json')).json();
+    PLACES = await (await fetch('places.json')).json();
+    for (const e of PLACES.events) EVENTS.set(e.m * 100 + e.d, e);
+  } catch (e) {
+    $('#months').innerHTML = '<p class="loading">The letter index could not be loaded. Reload the page to try again.</p>'; return;
+  }
+  renderList();
+  const m = (location.hash || '').match(/^#L(\d+)$/i);
+  const k = ROWS.findIndex(r => r.L === (m ? +m[1] : 257));
+  cur = k >= 0 ? k : 0;
+  setView(m ? 'letters' : 'cal');
+  try {
+    [T1, T3, DIFF, ENC] = await Promise.all(['t1.json', 't3.json', 'diff.json', 'enc.json'].map(f => fetch(f).then(r => r.json())));
+    if (QRE) renderList();
+    renderText();
+  } catch (e) {
+    const t = $('#text'); if (t) t.innerHTML = '<p class="loading">The letter texts could not be loaded. Reload the page to try again.</p>';
+  }
+}
+boot();
+</script>
+</body>
+</html>
