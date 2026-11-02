@@ -1,18 +1,17 @@
 # Clarissa Calendar
 
-A reading tool for Samuel Richardson's *Clarissa*. It has two views:
+A tool for Samuel Richardson's *Clarissa* to help both students and researchers compare multiple versions of the text, as well as visualize the whole of the text on a calendar.
 
-- **Calendar.** Every letter is placed on its day in the story, drawn as a shape for its writer. Clicking a day opens the letter in a pop-up.
-- **Letters.** The first edition (1748) and the third edition (1751) are shown side by side, with every change in wording marked. Each letter also carries its Penguin (Angus Ross) number.
+- **Calendar.** Each letter's author has a corresponding shape that is drawn on the day it was written. You can hide the letters from any one individual by clicking their button in the top bar. Clicking on a day will open the first of the letters from that day and provide several buttons linking to the other letters for that day. 
+- **Letters.** Each letter has been a 1748 and 1751 printing, as well as a comparative view. The first edition and the third edition are shown side by side, with marked changes in wording.
 
-Other features:
+In addition:
 
-- Richardson's footnotes appear on hover. His page references are turned into links to the letters they mean.
-- Enclosed letters are set off from the letter that contains them.
-- A search covers every text, note and heading.
-- A "Most revised" list ranks the letters Richardson expanded most for 1751.
+- This tool features a search function of the entire text in both editions.
+- A "Most revised" list ranks the letters Richardson modified most for 1751.
+- Richardson's footnotes appear on hover.
 
-The app is one static page, `site/index.html`, plus the JSON files next to it. It needs no server code. Any static host will do, including GitHub Pages, or `python3 -m http.server` run inside `site/`.
+The app is one static page, `site/index.html`, plus the JSON files next to it.
 
 ## Folder layout
 
@@ -27,18 +26,9 @@ work/           intermediate files written by the build (not committed; safe to 
 
 ## Sources and rights
 
-| File in `sources/` | What it is | Used for |
-|---|---|---|
-| `proquest_1748.pdf` | ProQuest Literature Online export, *Clarissa* 1st ed. (1747–48) | the 1748 text and notes |
-| `proquest_1751.pdf` | ProQuest Literature Online export, *Clarissa* 3rd ed. (1751) | the 1751 text and notes |
-| `upenn_1751.json` | pages of *Clarissa: The Complete 3rd Edition*, clarissa.english.upenn.edu | passages ProQuest's 1751 text lacks |
-| `penguin_ross.epub` | Angus Ross's Penguin edition (1985), your own copy | checking the 1748 text; enclosure numbering |
+This tool uses texts for each edition drawn directly from ProQuest. These have some OCR issues that might be present in the final tool. I also compare against Angus Ross' edition, but I don't reproduce any of the Penguin text.
 
-**Check the rights before publishing the site.**
-
-- The ProQuest transcriptions come from a licensed database, and its terms most likely do not allow republishing them.
-- The UPenn site is free to read but states no terms of reuse.
-- None of Ross's text is reproduced. The build reads his edition only to compare against, and keeps nothing from it beyond letter and enclosure numbers.
+## How it works
 
 `upenn_1751.json` maps `"volume.letter"` to each page's HTML. The site has no download, so the pages were collected in a browser on the site itself:
 
