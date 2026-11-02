@@ -47,35 +47,11 @@ for (let v = 1; v <= 8; v++) {
 
 ## Building
 
-You need Python 3.10 or later and `pdftotext` from poppler-utils. Then run:
+I used Claude. Claude extracted the text from the two PDFs using Python 3.10 and `pdftotext` from poppler-utils. Claude then had to rebuild the text from broken OCR lines into actual paragraphs and split it into letters, for each edition. This is why I used artificial intelligence: It's an absoluately absurd amnount of text. Claude then had to pair the letters and number them sequentially, put them on a calendar, and mark changes. These steps were all done with Python scripts, and those scripts can be viewed in the data folder, though currently they do nothing.
 
-```
-python3 build/build.py          # all steps, about 3 minutes
-python3 build/build.py 8        # from step 8 on
-python3 build/build.py 8 8      # step 8 only
-```
+## Files (in `site/`)
 
-Every step is a short script with a full description at its top. In brief:
-
-| Step | Script | Does |
-|---|---|---|
-| 1 | `s01_extract.py` | extracts text and word positions from the PDFs (pdftotext) |
-| 2 | `s02_reflow.py` | rebuilds paragraphs from the line geometry: a line ends a paragraph when the next line's first word would have fitted on it |
-| 3 | `s03_parse.py` | splits the text into letters (headings, datelines, footnotes) and separates Richardson's 1748 editor's summaries |
-| 4 | `s04_align.py` | pairs each 1748 letter with its 1751 letter and assigns Penguin numbers; checks the pairing against Penguin's list of skipped numbers |
-| 5 | `s05_index.py` | writes the letter index and the two text files |
-| 6 | `s06_paragraphs.py` | settles uncertain paragraph breaks by looking at the other edition |
-| 7 | `s07_sources.py` | reads the UPenn pages and the Penguin epub |
-| 8 | `s08_supplement.py` | restores the postscripts, editorial passages and blank pages that ProQuest dropped |
-| 9 | `s09_dating.py` | places every letter on the story calendar |
-| 10 | `s10_annotate.py` | adds places of writing, deceptive letters and the marked days |
-| 11 | `s11_enclosures.py` | finds the enclosed letters and their paragraphs |
-| 12 | `s12_links.py` | turns page references in notes and text into links to letters |
-| 13 | `s13_compare.py` | makes the word-by-word comparison and counts how much each letter was revised |
-
-The UPenn and Penguin sources are optional. Without them, steps 7 and 8 skip the supplementing. Step 11 then takes the enclosure list from `build/data/` but cannot place the enclosures in the text.
-
-## Data files (in `site/`)
+The actual texts live in two .json files, t1.json for 1748 and t3.json for 1751, which Claude created using the Python scripts in the data folder.
 
 - **`index.json`** has one row per letter, in the 1751 order. Each row gives:
   - the Penguin number (`L`)
@@ -94,25 +70,27 @@ The UPenn and Penguin sources are optional. Without them, steps 7 and 8 skip the
 
 ## Editorial choices
 
-The texts are edited, not merely transcribed. These are the choices made, and where to change each one.
+In creating this tool, I realized I was making an edition, given all the editorial choices I was making, particularly given the need to assign each letter a date. Here are some of those choices:
 
-- **Year.** Richardson never gives the year. His weekdays fit a common year that begins on a Sunday, and the calendar follows that year (`common.py`). Ross argues for 1732, which was a leap year. The note at the top of the calendar is the editor's own wording.
-- **Dates.** The calendar follows the 1748 datelines, as Ross does, then the 1751 ones where 1748 gives none (`s09_dating.py`). The 1751 dateline is used instead for three 1748 misprints (L132, L146, L191, in `MISPRINTS`) and for letters split differently in 1751. Each heading shows the dateline of the edition on screen; side by side, a differing 1751 dateline is shown after the 1748 one.
-  - A letter that gives only a weekday goes on that weekday, on or just after the letter before it.
+- **Year.** The year is the standard "Common Year Starting on a Sunday." https://en.wikipedia.org/wiki/Common_year_starting_on_Sunday
+
+- **Dates.** The calendar follows the 1748 datelines, then the 1751 ones where 1748 gives none. The 1751 dateline is used instead for three 1748 misprints (L132, L146, L191) and for letters split differently in 1751. Each heading shows the dateline of the edition on screen; side by side, a differing 1751 dateline is shown after the 1748 one.
+  - A letter that gives only a weekday goes on the next nearest the letter before it.
   - An undated letter goes on the day of the letter before it.
-  - Lovelace's death is marked on 18 December, the date of De la Tour's letter ("Dec. 18. N. S."), not the Old Style equivalent.
+
 - **Restored passages** (`s08_supplement.py`).
   - **1751.** Passages missing from ProQuest's transcription are supplied from UPenn's transcription.
-  - **1748.** Passages missing from ProQuest are supplied in the 1751 wording, but only where that wording agrees with Ross's text. About 420 words, in nine letters, could not be restored this way (L158, L165, L207, L257, L307, L363, L451, L467, L492). `work/supplement_report.json` lists them.
+  - **1748.** Passages missing from ProQuest are supplied in the 1751 wording, but only where that wording agrees with Ross's text. About 420 words, in nine letters, could not be restored this way (L158, L165, L207, L257, L307, L363, L451, L467, L492).
+
 - **Footnotes.** All of Richardson's notes are kept. His page references are resolved to letters (`s12_links.py`).
+
 - **Places** (`s10_annotate.py`).
   - **Stated:** the place is named in the letter's dateline or heading.
-  - **Inferred:** the place comes from the writer's movements in the story, set out in `PHASES`, with the letters each stretch rests on noted in comments.
-- **Deceptive letters** (`s10_annotate.py`, `DECEPTIONS`) are flagged only when the letter is forged, sent under a false name, or carries an intercepted or impostor's letter. Spying (Joseph Leman) and misleading wording (L421) were deliberately left out.
-- **Marked days** (`s10_annotate.py`, `EVENTS` and `REVISIONS`):
-  - Black outlines: the kidnapping, the fire, the arrest, Morden's return, Clarissa's death and Lovelace's death.
-  - Green outline: the much-revised L140, named "Miss Betterton's Death".
-  - 13 June is drawn in red (`SEL_RED` in `index.html`).
-- **Writer groups** for the calendar's shapes are worked out from the headings. Letters whose heading names only the recipient are fixed by hand in `s05_index.py` (`GROUP_FIX`).
-- **Enclosures** follow Penguin's numbering. The ten "Papers" in L261 are also treated as enclosures (`s11_enclosures.py`).
-- **Not shown:** ProQuest's printed page numbers and its marginal dots, which mark paragraphs Richardson added in 1751.
+  - **Inferred:** the place comes from the writer's movements in the story, set out in phases, with the letters each stretch rests on noted in comments.
+
+- **Deceptive letters** (`s10_annotate.py`) are flagged only when the letter is forged, sent under a false name, or carries an intercepted or impostor letter.
+
+- **Marked days**:
+  - Black outlines, pointing to some of the text's most important moments: the kidnapping, the fire, the arrest, Morden's return, Clarissa's death, and Lovelace's death.
+  - Green outline: one of the most revised letter's, which I think is most revealing about Richardson's purposes in making these revisions: L140, named "Miss Betterton's Death".
+  - 13 June, the day of the assault, is drawn in red.
